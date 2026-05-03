@@ -3,7 +3,6 @@
 **A Retrieval-Augmented Generation application that lets you upload PDFs and ask questions — with answers grounded in your actual documents.**
 
 ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
-![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o--mini-412991?logo=openai&logoColor=white)
 ![Qdrant](https://img.shields.io/badge/Qdrant-Vector_DB-DC382D)
 ![Streamlit](https://img.shields.io/badge/Streamlit-Frontend-FF4B4B?logo=streamlit&logoColor=white)
 
