@@ -1,0 +1,6 @@
+streamlit
+qdrant-client
+python-dotenv
+pypdf
+requests
+google-generativeai
