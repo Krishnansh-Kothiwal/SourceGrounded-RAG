@@ -77,8 +77,8 @@ This prevents AI hallucination by anchoring every answer in your actual document
 
 ### Prerequisites
 - Python 3.10+
-- An [OpenAI API key](https://platform.openai.com/api-keys)
-
+- A Gemini API key
+- A Hugging Face API key
 ### Setup (4 steps)
 
 ```bash
