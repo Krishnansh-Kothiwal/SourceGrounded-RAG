@@ -12,7 +12,8 @@ Two main functions:
 """
 
 import os
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 from ingestion import load_pdf, chunk_text, get_embeddings
 from vector_store import add_documents, search, reset_collection
@@ -21,22 +22,16 @@ load_dotenv()
 
 # --- Configuration ---
 # Embeddings: Hugging Face (all-MiniLM-L6-v2)
-# Generation: Google Gemini
-GEMINI_MODEL = "gemini-2.5-flash-lite"  # Fast, free-tier friendly
+# Generation: Google Gemma 4 (via Gemini API)
+GENERATION_MODEL = "gemma-4-26b-a4b-it"  # Gemma 4 MoE — 26B total / 4B active params
 
-# Configure Gemini client
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-_gemini = genai.GenerativeModel(
-    model_name=GEMINI_MODEL,
-    generation_config=genai.GenerationConfig(
-        temperature=0.2,
-        max_output_tokens=512,
-    ),
-    system_instruction=(
-        "You are a helpful assistant. Answer only using the provided context. "
-        "If the answer is not in the context, say you do not know."
-    ),
+SYSTEM_INSTRUCTION = (
+    "You are a helpful assistant. Answer only using the provided context. "
+    "If the answer is not in the context, say you do not know."
 )
+
+# Configure Gemini API client (hosts Gemma models too)
+_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 
 def ingest_document(file_path: str, source_name: str = None) -> int:
@@ -122,8 +117,16 @@ def ask(question: str, top_k: int = 5) -> dict:
         f"Question: {question}"
     )
 
-    # Step 5: Call Gemini for generation
-    response = _gemini.generate_content(prompt)
+    # Step 5: Call Gemma 4 for generation
+    response = _client.models.generate_content(
+        model=GENERATION_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_INSTRUCTION,
+            temperature=0.2,
+            max_output_tokens=512,
+        ),
+    )
     answer = response.text.strip()
 
     return {

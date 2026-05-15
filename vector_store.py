@@ -8,8 +8,8 @@ Key concept:
   and lets you find the most similar ones to a query using cosine similarity.
   Think of it as "search by meaning" instead of "search by keyword."
 
-We use Qdrant in local file mode — no external server needed.
-Data persists in the ./qdrant_data folder.
+We use Qdrant in in-memory mode — no disk files, no stale data, no lock
+issues. The collection is always fresh on each server start.
 """
 
 import uuid
@@ -17,18 +17,23 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import VectorParams, Distance, PointStruct
 
 # --- Configuration ---
-QDRANT_PATH = "./qdrant_data"       # Local file storage (no server needed)
-COLLECTION_NAME = "pdf_chunks_hf"   # Separate from any old OpenAI 1536-dim data
-VECTOR_DIM = 384                    # all-MiniLM-L6-v2 outputs 384-dimensional vectors
+COLLECTION_NAME = "pdf_chunks"  # In-memory collection name
+VECTOR_DIM = 384                # all-MiniLM-L6-v2 outputs 384-dimensional vectors
 
-# --- Shared Client (created once, reused everywhere) ---
-_client = QdrantClient(path=QDRANT_PATH)
+# --- In-memory client: no disk files, guaranteed clean state on every start ---
+_client = QdrantClient(":memory:")
+
+
+def get_client() -> QdrantClient:
+    """Return the shared in-memory QdrantClient."""
+    return _client
 
 
 def _ensure_collection():
     """Create the collection if it doesn't exist yet."""
-    if not _client.collection_exists(COLLECTION_NAME):
-        _client.create_collection(
+    client = get_client()
+    if not client.collection_exists(COLLECTION_NAME):
+        client.create_collection(
             collection_name=COLLECTION_NAME,
             vectors_config=VectorParams(
                 size=VECTOR_DIM,
@@ -45,10 +50,13 @@ def reset_collection():
     don't mix with the new document. Keeps this app simple as a
     single-document demo.
     """
-    if _client.collection_exists(COLLECTION_NAME):
-        _client.delete_collection(COLLECTION_NAME)
+    global _client
+    client = get_client()
 
-    _client.create_collection(
+    if client.collection_exists(COLLECTION_NAME):
+        client.delete_collection(COLLECTION_NAME)
+
+    client.create_collection(
         collection_name=COLLECTION_NAME,
         vectors_config=VectorParams(
             size=VECTOR_DIM,
@@ -75,6 +83,7 @@ def add_documents(chunks: list[str], vectors: list[list[float]], source: str) ->
         Number of chunks stored
     """
     _ensure_collection()
+    client = get_client()
 
     points = []
     for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
@@ -89,7 +98,7 @@ def add_documents(chunks: list[str], vectors: list[list[float]], source: str) ->
         )
         points.append(point)
 
-    _client.upsert(collection_name=COLLECTION_NAME, points=points)
+    client.upsert(collection_name=COLLECTION_NAME, points=points)
     return len(points)
 
 
@@ -108,9 +117,10 @@ def search(query_vector: list[float], top_k: int = 5) -> list[dict]:
         List of dicts with 'text', 'source', and 'score' keys
     """
     _ensure_collection()
+    client = get_client()
 
     # qdrant-client v1.7+ replaced .search() with .query_points()
-    response = _client.query_points(
+    response = client.query_points(
         collection_name=COLLECTION_NAME,
         query=query_vector,
         limit=top_k,

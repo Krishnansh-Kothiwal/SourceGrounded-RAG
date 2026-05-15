@@ -3,6 +3,8 @@
 **A Retrieval-Augmented Generation application that lets you upload PDFs and ask questions — with answers grounded in your actual documents.**
 
 ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
+![Google Gemini](https://img.shields.io/badge/Google%20Gemma--4-26B-4285F4?logo=google&logoColor=white)
+![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Embeddings-FFD21E?logo=huggingface&logoColor=black)
 ![Qdrant](https://img.shields.io/badge/Qdrant-Vector_DB-DC382D)
 ![Streamlit](https://img.shields.io/badge/Streamlit-Frontend-FF4B4B?logo=streamlit&logoColor=white)
 
@@ -42,10 +44,10 @@ This prevents AI hallucination by anchoring every answer in your actual document
 |-------|-------------|------------|
 | **PDF Reading** | Extract raw text from uploaded PDFs | `pypdf` |
 | **Chunking** | Split text into 1000-char overlapping segments | Custom splitter |
-| **Embedding** | Convert text chunks into 1536-dim vectors | OpenAI `text-embedding-3-small` |
-| **Storage** | Store vectors with metadata for retrieval | Qdrant (local mode) |
+| **Embedding** | Convert text chunks into 384-dim vectors | Hugging Face `all-MiniLM-L6-v2` |
+| **Storage** | Temporary vector storage for retrieval | Qdrant (In-Memory) |
 | **Retrieval** | Find top-K most similar chunks to the query | Cosine similarity search |
-| **Generation** | LLM answers using only retrieved context | OpenAI `GPT-4o-mini` |
+| **Generation** | LLM answers using only retrieved context | Google `Gemma-4-26B-A4B` |
 
 ---
 
@@ -54,8 +56,8 @@ This prevents AI hallucination by anchoring every answer in your actual document
 - 📄 **PDF Upload** — Upload any PDF to build a searchable knowledge base
 - 🧩 **Overlapping Chunking** — Smart text splitting preserves context across boundaries
 - 🔢 **Semantic Embeddings** — Text converted to meaning-aware vectors
-- 🗄️ **Local Vector Search** — Qdrant runs locally, no external server needed
-- 🤖 **Grounded Answers** — GPT-4o-mini answers using *only* your documents
+- 🗄️ **In-Memory Search** — Qdrant runs in-memory for instant, fresh results (no stale data)
+- 🤖 **Grounded Answers** — Gemma 4 answers using *only* your documents
 - 📎 **Source Attribution** — See which chunks informed each answer
 
 ---
@@ -65,9 +67,9 @@ This prevents AI hallucination by anchoring every answer in your actual document
 | Component | Technology | Why |
 |-----------|-----------|-----|
 | **Frontend** | Streamlit | Simple, Python-native UI |
-| **Embeddings** | OpenAI API | Industry-standard quality |
-| **Vector DB** | Qdrant (local) | Fast, no setup required |
-| **LLM** | GPT-4o-mini | Fast, cost-effective |
+| **Embeddings** | Hugging Face API | Lightweight, fast, high-quality |
+| **Vector DB** | Qdrant (In-Memory) | Fast, no lock issues, fresh state |
+| **LLM** | Google Gemma 4 | State-of-the-art MoE reasoning |
 | **PDF Parser** | pypdf | Lightweight, no dependencies |
 
 ---
@@ -76,8 +78,9 @@ This prevents AI hallucination by anchoring every answer in your actual document
 
 ### Prerequisites
 - Python 3.10+
-- A Gemini API key
-- A Hugging Face API key
+- A [Google Gemini API Key](https://aistudio.google.com/app/apikey)
+- A [Hugging Face Access Token](https://huggingface.co/settings/tokens)
+
 ### Setup (4 steps)
 
 ```bash
@@ -88,9 +91,9 @@ cd SourceGrounded-RAG
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Add your OpenAI API key
+# 3. Add your API keys
 cp .env.example .env
-# Edit .env and paste your API key
+# Edit .env and paste your Gemini API key and Hugging Face token
 
 # 4. Run the app
 streamlit run streamlit_app.py
@@ -107,8 +110,8 @@ SourceGrounded-RAG/
 ├── streamlit_app.py    # Frontend UI — upload PDFs and ask questions
 ├── rag_pipeline.py     # Core pipeline — connects ingestion and querying
 ├── ingestion.py        # PDF loading, text chunking, embedding generation
-├── vector_store.py     # Qdrant operations — store and search vectors
-├── requirements.txt    # Python dependencies (5 packages)
+├── vector_store.py     # Qdrant operations — in-memory storage & search
+├── requirements.txt    # Python dependencies
 ├── .env.example        # Template for environment variables
 ├── .gitignore          # Files excluded from version control
 └── README.md           # You are here
@@ -122,15 +125,15 @@ SourceGrounded-RAG/
 When you upload a PDF, the app:
 - **Extracts text** from every page using `pypdf`
 - **Chunks the text** into ~1000-character segments with 200-character overlap (so no context is lost at boundaries)
-- **Generates embeddings** — each chunk is sent to OpenAI's embedding model, which returns a 1536-dimensional vector capturing its semantic meaning
-- **Stores in Qdrant** — vectors are saved locally with the original text as metadata
+- **Generates embeddings** — each chunk is sent to Hugging Face's inference API, which returns a 384-dimensional vector capturing its semantic meaning
+- **Stores in Qdrant** — vectors are saved in an **in-memory** collection (guaranteed fresh on every restart)
 
 ### 2. Question Answering
 When you ask a question:
 - **Embeds the question** using the same embedding model
 - **Searches Qdrant** for the top-K chunks whose vectors are most similar (cosine similarity)
 - **Builds a prompt** with the retrieved chunks as context
-- **Sends to GPT-4o-mini** with instructions to answer *only* from the provided context
+- **Sends to Google Gemma 4** with instructions to answer *only* from the provided context
 - **Returns the answer** with source attribution
 
 ---
@@ -139,7 +142,8 @@ When you ask a question:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENAI_API_KEY` | ✅ | Your OpenAI API key |
+| `GEMINI_API_KEY` | ✅ | Your Google Gemini API key |
+| `HF_TOKEN` | ✅ | Your Hugging Face access token |
 
 All configuration is in `.env`. See `.env.example` for the template.
 
