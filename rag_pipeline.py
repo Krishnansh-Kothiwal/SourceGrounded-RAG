@@ -23,7 +23,7 @@ load_dotenv()
 # --- Configuration ---
 # Embeddings: Hugging Face (all-MiniLM-L6-v2)
 # Generation: Google Gemma 4 (via Gemini API)
-GENERATION_MODEL = "gemma-4-26b-a4b-it"  # Gemma 4 MoE — 26B total / 4B active params
+GENERATION_MODEL = "gemini-3.1-flash-lite"  # GA as of May 2026 — ultra-low latency, free-tier
 
 SYSTEM_INSTRUCTION = (
     "You are a helpful assistant. Answer only using the provided context. "
