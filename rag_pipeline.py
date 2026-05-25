@@ -1,136 +1,162 @@
 """
-rag_pipeline.py — Core RAG Pipeline
+rag_pipeline.py — Core Pipeline Orchestrator
 
-This is the brain of the application. It connects all the pieces:
+Connects all components:
 
-  INGESTION:  PDF → chunks → embeddings → vector store
-  QUERYING:   question → embedding → search → context → LLM → answer
+  INGESTION:
+    File → Loader → Preprocessor → Chunker → Embedder → Vector Store + BM25 Index
 
-Two main functions:
-  - ingest_document(): Process and store a PDF
-  - ask(): Answer a question using stored documents
+  QUERYING:
+    Question → Embed → Vector Search + BM25 Search → RRF Fusion
+             → [Optional Reranker] → Grounded Generation → Answer
+
+Two public functions:
+  ingest_document() — process one document and add it to the indexes
+  ask()             — answer a question using all indexed documents
 """
 
 import os
-from google import genai
-from google.genai import types
+import time
+from pathlib import Path
 from dotenv import load_dotenv
-from ingestion import load_pdf, chunk_text, get_embeddings
-from vector_store import add_documents, search, reset_collection
+
+from ingestion.loaders import load_document
+from ingestion.preprocessor import preprocess_pages
+from ingestion.chunker import chunk_pages
+from retrieval.embedder import embed
+from retrieval.vector_store import (
+    add_documents as vs_add,
+    search as vs_search,
+    reset_collection,
+)
+from retrieval.bm25_store import get_store as get_bm25
+from retrieval.hybrid import reciprocal_rank_fusion
+from retrieval.reranker import rerank, ENABLE_RERANKER, RERANK_TOP_N
+from generation.generator import generate_answer
 
 load_dotenv()
 
-# --- Configuration ---
-# Embeddings: Hugging Face (all-MiniLM-L6-v2)
-# Generation: Google Gemma 4 (via Gemini API)
-GENERATION_MODEL = "gemini-3.1-flash-lite"  # GA as of May 2026 — ultra-low latency, free-tier
-
-SYSTEM_INSTRUCTION = (
-    "You are a helpful assistant. Answer only using the provided context. "
-    "If the answer is not in the context, say you do not know."
-)
-
-# Configure Gemini API client (hosts Gemma models too)
-_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+RETRIEVAL_TOP_K: int = int(os.getenv("RETRIEVAL_TOP_K", "10"))
 
 
-def ingest_document(file_path: str, source_name: str = None) -> int:
+def ingest_document(
+    file_path: str,
+    source_name: str | None = None,
+    reset: bool = True,
+) -> int:
     """
-    Full document ingestion pipeline:
-      1. Read PDF → extract text
-      2. Split text into overlapping chunks
-      3. Generate an embedding for each chunk
-      4. Store chunks + embeddings in vector database
+    Full ingestion pipeline for one document.
+
+    Steps:
+      1. Load document pages via the appropriate loader (PDF/TXT/MD)
+      2. Preprocess: strip headers/footers, normalize whitespace, detect tables
+      3. Chunk: token-aware recursive chunking with page boundaries respected
+      4. Embed: generate HF embeddings for all chunks
+      5. Index: store in Qdrant (vector) and BM25 (keyword) simultaneously
 
     Args:
-        file_path: Path to the PDF file
-        source_name: Display name for the source (defaults to file_path)
+        file_path:   Path to the document on disk.
+        source_name: Display name for citations (defaults to filename).
+        reset:       If True, clear existing indexes before ingesting.
+                     Set to False when adding subsequent documents in a batch.
 
     Returns:
-        Number of chunks ingested
+        Number of chunks ingested (0 if the document was empty after preprocessing).
     """
     if source_name is None:
-        source_name = file_path
+        source_name = Path(file_path).name
 
-    # Clear old chunks — this is a single-document demo
-    reset_collection()
+    doc_type = Path(file_path).suffix.lstrip(".").lower()
 
-    # Step 1: Extract text from PDF
-    text = load_pdf(file_path)
+    if reset:
+        reset_collection()
+        get_bm25().reset()
 
-    if not text.strip():
+    # Step 1: Load
+    pages = load_document(file_path)
+    if not pages:
         return 0
 
-    # Step 2: Split into chunks
-    chunks = chunk_text(text)
+    # Step 2: Preprocess
+    pages = preprocess_pages(pages)
+    if not pages:
+        return 0
 
+    # Step 3: Chunk
+    chunks = chunk_pages(pages, source=source_name, doc_type=doc_type)
     if not chunks:
         return 0
 
-    # Step 3: Generate embeddings via Hugging Face
-    vectors = get_embeddings(chunks)
+    # Step 4: Embed (batch call to HF API)
+    texts = [c["text"] for c in chunks]
+    vectors = embed(texts)
 
-    # Step 4: Store in Qdrant
-    count = add_documents(chunks, vectors, source_name)
+    # Step 5: Index into vector store and BM25 simultaneously
+    vs_add(chunks, vectors)
+    get_bm25().add_documents(chunks)
 
-    return count
+    return len(chunks)
 
 
-def ask(question: str, top_k: int = 5) -> dict:
+def ask(question: str, top_k: int = RETRIEVAL_TOP_K) -> dict:
     """
-    Full RAG query pipeline:
-      1. Convert the question into an embedding
-      2. Search the vector store for similar chunks
-      3. Assemble retrieved chunks into a context block
-      4. Send context + question to Gemini for grounded generation
-      5. Return the answer
+    Full RAG query pipeline.
+
+    Steps:
+      1. Embed the question via HF API
+      2. Vector search in Qdrant (top_k results)
+      3. BM25 keyword search (top_k results)
+      4. Reciprocal Rank Fusion — merge and deduplicate both result lists
+      5. [Optional] Cross-encoder reranking (if ENABLE_RERANKER=true)
+      6. Grounded generation with refusal logic
 
     Args:
-        question: The user's question
-        top_k: Number of chunks to retrieve (default 5)
+        question: The user's question.
+        top_k:    Candidate chunks to retrieve from each system before fusion.
 
     Returns:
-        Dict with 'answer', 'sources', and 'contexts' keys
+        Dict with:
+          answer          (str):        Final answer or refusal message.
+          refused         (bool):       True if refusal was triggered.
+          refusal_reason  (str):        Why refusal was triggered (empty if not).
+          sources         (list[str]):  Unique source documents.
+          chunks          (list[dict]): Final chunks passed to LLM, with all scores.
+          context_block   (str):        Exact context sent to the LLM.
+          retrieval_ms    (float):      Time spent in retrieval (ms).
+          vector_results  (list[dict]): Raw vector search results (for observability).
+          bm25_results    (list[dict]): Raw BM25 results (for observability).
+          reranker_enabled (bool):      Whether the reranker was active.
     """
-    # Step 1: Embed the question
-    query_vector = get_embeddings([question])[0]
+    t0 = time.perf_counter()
 
-    # Step 2: Search for relevant chunks
-    results = search(query_vector, top_k=top_k)
+    # Step 1: Embed the query.
+    query_vector = embed([question])[0]
 
-    if not results:
-        return {
-            "answer": "No relevant documents found. Please upload a PDF first.",
-            "sources": [],
-            "contexts": [],
-        }
+    # Step 2: Vector similarity search.
+    vector_results = vs_search(query_vector, top_k=top_k)
 
-    # Step 3: Build context from retrieved chunks
-    contexts = [r["text"] for r in results]
-    sources = list(set(r["source"] for r in results))
-    context_block = "\n\n---\n\n".join(contexts)
+    # Step 3: BM25 keyword search.
+    bm25_results = get_bm25().search(question, top_k=top_k)
 
-    # Step 4: Build the grounded prompt
-    prompt = (
-        f"Answer the question based only on the context below.\n\n"
-        f"Context:\n{context_block}\n\n"
-        f"Question: {question}"
-    )
+    # Step 4: Reciprocal Rank Fusion — combine and deduplicate both result lists.
+    fused = reciprocal_rank_fusion(vector_results, bm25_results, top_k=top_k)
 
-    # Step 5: Call Gemma 4 for generation
-    response = _client.models.generate_content(
-        model=GENERATION_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
-            temperature=0.2,
-            max_output_tokens=512,
-        ),
-    )
-    answer = response.text.strip()
+    retrieval_ms = (time.perf_counter() - t0) * 1000
 
-    return {
-        "answer": answer,
-        "sources": sources,
-        "contexts": contexts,
-    }
+    # Step 5: Optionally rerank with cross-encoder.
+    if ENABLE_RERANKER and fused:
+        chunks = rerank(question, fused, top_n=RERANK_TOP_N)
+    else:
+        chunks = fused
+
+    # Step 6: Grounded generation with refusal check.
+    result = generate_answer(question, chunks)
+
+    # Attach debug metadata for the observability panel.
+    result["chunks"] = chunks
+    result["retrieval_ms"] = round(retrieval_ms, 1)
+    result["vector_results"] = vector_results
+    result["bm25_results"] = bm25_results
+    result["reranker_enabled"] = ENABLE_RERANKER
+
+    return result
