@@ -218,16 +218,7 @@ RRF uses only **rank position**: `score(d) = Σ 1/(60 + rank(d))`. A document at
 
 Cross-encoder scores are raw logits — unbounded values typically in [-10, +10]. They are not cosine similarities. A threshold of `0.3` would be meaningless (most relevant documents score between 3 and 9). Refusal uses `vector_score` (cosine similarity, 0–1) which has a well-defined scale.
 
----
 
-## 📝 Resume Bullet Points
-
-- **Built a hybrid RAG system** combining dense vector retrieval (Qdrant/all-MiniLM-L6-v2) and sparse BM25 keyword search (rank-bm25), fused via Reciprocal Rank Fusion — eliminating score normalization brittleness across retrieval systems with incompatible score distributions
-- **Implemented token-aware recursive chunking** using tiktoken (cl100k_base), splitting on paragraph → sentence → word boundary hierarchy to preserve semantic coherence; designed page-aware logic that never merges content across PDF page boundaries and preserves tables as atomic chunks
-- **Designed a cross-encoder reranking stage** (ms-marco-MiniLM-L-6-v2) as a toggleable post-retrieval step; correctly identified that cross-encoder logits are unbounded raw scores and scoped the retrieval confidence threshold to cosine similarity scores only
-- **Built a source-grounded generation pipeline** with Gemini that refuses to answer when top vector similarity falls below a configurable threshold or insufficient chunks are retrieved, returning a standard refusal message instead of hallucinating
-- **Engineered a developer observability panel** in Streamlit exposing per-chunk vector scores, BM25 scores, reranker scores, retrieval latency (ms), chunk metadata (page, source, is_table, token_count), and the exact context string passed to the LLM
-- **Upgraded from single-PDF to multi-document support** with a modular loader registry (PDF/TXT/Markdown), preprocessing pipeline (header/footer detection, whitespace normalization, table detection), and per-chunk metadata preserving source document, page number, and document type for cross-document citation
 
 ---
 
