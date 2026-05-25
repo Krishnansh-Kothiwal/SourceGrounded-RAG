@@ -192,31 +192,7 @@ SourceGrounded-RAG/
 | `QDRANT_MODE` | `memory` | `memory` or `disk` |
 | `QDRANT_PATH` | `./qdrant_data` | Disk path (only when `QDRANT_MODE=disk`) |
 
----
 
-## 🔍 Engineering Deep Dive
-
-### Why Recursive Chunking?
-
-Naive character splitting cuts at fixed byte offsets — mid-sentence, mid-paragraph, anywhere. This produces incoherent chunks that embed poorly.
-
-Recursive splitting walks a priority hierarchy of natural boundaries:
-```
-paragraph (\n\n) → line (\n) → sentence (. ) → word ( ) → character
-```
-It always uses the coarsest boundary that fits within the token budget. Result: chunks aligned to semantic units, not byte positions.
-
-**Token counting matters:** `1 token ≈ 4 chars` breaks badly for code, tables, non-English text, and punctuation-heavy content. `tiktoken` counts exactly.
-
-### Why RRF over Score Normalization?
-
-Vector cosine scores (0–1) and BM25 scores (0–∞) are incomparable. Normalizing requires knowing the min/max per query — which changes every query and can be dominated by outliers.
-
-RRF uses only **rank position**: `score(d) = Σ 1/(60 + rank(d))`. A document at rank 3 contributes identically regardless of its raw score. Documents appearing in both result lists receive contributions from both — naturally boosting doubly-relevant results.
-
-### Why Not Use Reranker Scores for Refusal?
-
-Cross-encoder scores are raw logits — unbounded values typically in [-10, +10]. They are not cosine similarities. A threshold of `0.3` would be meaningless (most relevant documents score between 3 and 9). Refusal uses `vector_score` (cosine similarity, 0–1) which has a well-defined scale.
 
 
 
